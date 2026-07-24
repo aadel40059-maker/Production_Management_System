@@ -4,6 +4,7 @@ import os
 import calendar
 import matplotlib.pyplot as plt
 import numpy as np
+import base64
 from datetime import datetime, time as dtime
 
 st.set_page_config(
@@ -185,18 +186,35 @@ def categorize_product(name):
     """يصنف الصنف حسب أول كلمة في اسمه: سولا / طوفي / اكلير"""
     name = str(name).strip()
     if name.startswith("سولا"):
-        return "Hard Candy"
+        return "هارد كاندي"
     elif name.startswith("طوفي"):
-        return "Toffee"
+        return "طوفي"
     elif name.startswith("اكلير") or name.startswith("إكلير"):
-        return "Eclair"
+        return "اكلير"
     else:
-        return "Other"
+        return "أخرى"
 
 
-def build_printable_html(title, subtitle, df):
+def build_printable_html(title, subtitle, df, extra_title=None, extra_df=None):
     """يبني صفحة HTML جاهزة للطباعة/تحويل PDF من المتصفح (Ctrl+P > Save as PDF)"""
     table_html = df.to_html(index=False, border=0, justify="center", na_rep="-")
+
+    if extra_df is not None:
+        extra_table_html = extra_df.to_html(index=False, border=0, justify="center", na_rep="-")
+        layout_html = f"""
+        <table class="layout-wrapper" width="100%">
+        <tr>
+            <td class="main-cell" valign="top">{table_html}</td>
+            <td class="side-cell" valign="top">
+                <h2>{extra_title or ""}</h2>
+                {extra_table_html}
+            </td>
+        </tr>
+        </table>
+        """
+    else:
+        layout_html = table_html
+
     html = f"""
     <!DOCTYPE html>
     <html lang="ar" dir="rtl">
@@ -204,22 +222,39 @@ def build_printable_html(title, subtitle, df):
     <meta charset="UTF-8">
     <title>{title}</title>
     <style>
-        body {{ font-family: 'Segoe UI', Tahoma, Arial, sans-serif; padding: 24px; color: #1a1d21; }}
-        h1 {{ font-size: 20px; margin-bottom: 2px; }}
-        p.sub {{ color: #6b7280; margin-top: 0; font-size: 13px; }}
-        table {{ border-collapse: collapse; width: 100%; margin-top: 16px; font-size: 13px; }}
-        th, td {{ border: 1px solid #d1d5db; padding: 6px 10px; text-align: center; }}
-        th {{ background-color: #f4f7fb; font-weight: 700; }}
-        tr:nth-child(even) {{ background-color: #fafafa; }}
+        @page {{ size: A4; margin: 6mm; }}
+        * {{ box-sizing: border-box; }}
+        body {{ font-family: 'Segoe UI', Tahoma, Arial, sans-serif; margin: 0; padding: 6px; color: #1a1d21; }}
+        h1 {{ font-size: 16px; margin: 0 0 2px; }}
+        h2 {{ color: #0b1f3a; font-size: 11px; margin: 0 0 4px; }}
+        p.dev {{ color: #374151; margin: 0 0 4px; font-size: 10px; font-weight: 600; }}
+        p.sub {{ color: #6b7280; margin: 0 0 6px; font-size: 9px; }}
+
+        table.layout-wrapper {{ border-collapse: collapse; }}
+        table.layout-wrapper > tr > td {{ border: none; padding: 0; }}
+        td.main-cell {{ width: 78%; padding-left: 10px !important; }}
+        td.side-cell {{ width: 22%; }}
+
+        table:not(.layout-wrapper) {{ border-collapse: collapse; width: 100%; font-size: 10px; }}
+        table:not(.layout-wrapper) th, table:not(.layout-wrapper) td {{
+            border: 1px solid #d1d5db; padding: 2.5px 4px; text-align: center;
+        }}
+        table:not(.layout-wrapper) th {{ background-color: #f4f7fb; font-weight: 700; }}
+        table:not(.layout-wrapper) tr:nth-child(even) {{ background-color: #fafafa; }}
+        table:not(.layout-wrapper) tr:last-child {{ font-weight: 700; background-color: #eef2f7; }}
+        .side-cell table {{ font-size: 9.5px; }}
+
         @media print {{
             body {{ padding: 0; }}
         }}
     </style>
     </head>
     <body>
-        <h1>🏭 Production Management System — {title}</h1>
+        <h1>🏭 Production Management System</h1>
+        <p class="dev">Developed by Eng. Ahmed Adel</p>
+        <h1 style="font-size:12px; margin-top:6px;">{title}</h1>
         <p class="sub">{subtitle}</p>
-        {table_html}
+        {layout_html}
     </body>
     </html>
     """
@@ -442,7 +477,13 @@ elif page == "Packing":
         }])
 
     # نثبت نوع كل عمود رقمي عشان مايتغيرش من قراءة لتانية (وده كان بيسبب تقريب الوزن العشري غلط)
-    month_grid["الصنف"] = month_grid["الصنف"].astype(str)
+    month_grid["الصنف"] = (
+        month_grid["الصنف"].astype(str)
+        .str.replace(r"\\n", " ", regex=True)
+        .str.replace("\n", " ", regex=False)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+    )
     month_grid["وزن الكرتونة (كيلو)"] = pd.to_numeric(month_grid["وزن الكرتونة (كيلو)"], errors="coerce").fillna(0.0).astype(float)
     month_grid["المخطط بالكراتين (شهري)"] = pd.to_numeric(month_grid["المخطط بالكراتين (شهري)"], errors="coerce").fillna(0).astype(int)
     for dc in day_cols:
@@ -558,36 +599,6 @@ elif page == "Packing":
             mime="text/csv"
         )
 
-        st.markdown("#### 🖨️ إعدادات تقرير الطباعة")
-        default_plan_days = min(datetime.now().day, days_in_month) if selected_month == datetime.now().strftime("%Y-%m") else days_in_month
-        plan_days = st.number_input(
-            "📆 الخطة نازلة كام يوم؟ (لحساب نسبة التحقيق بالنسبة للأيام)",
-            min_value=1, max_value=days_in_month, value=default_plan_days, step=1,
-            key="packing_plan_days"
-        )
-
-        print_df = summary[["الصنف", "إجمالي الكراتين", "المخطط بالكراتين (شهري)"]].copy()
-        print_df["نسبة التحقيق % (حسب الأيام)"] = summary.apply(
-            lambda r: round(
-                (r["إجمالي الكراتين"] / (r["المخطط بالكراتين (شهري)"] * plan_days / days_in_month) * 100), 1
-            ) if r["المخطط بالكراتين (شهري)"] > 0 and plan_days > 0 else 0,
-            axis=1
-        )
-        print_df = print_df.fillna(0)
-
-        printable_html = build_printable_html(
-            f"تقرير Packing — شهر {selected_month}",
-            f"تاريخ الطباعة: {datetime.now().strftime('%Y-%m-%d %H:%M')} — الخطة نازلة {plan_days} يوم من {days_in_month}",
-            print_df
-        )
-        st.download_button(
-            "🖨️ تحميل نسخة قابلة للطباعة (PDF)",
-            data=printable_html.encode("utf-8"),
-            file_name=f"packing_{selected_month}.html",
-            mime="text/html",
-            help="افتح الملف بعد التحميل، ودوس Ctrl+P واختار 'Save as PDF' عشان تحوله PDF أو تطبعه"
-        )
-
         st.divider()
         st.subheader("📅 ملخص يوم معين بالفئات")
         st.caption("زي جدول الإكسيل بتاعك — المسلم بالطن والكرتونة لكل فئة في يوم واحد")
@@ -613,9 +624,73 @@ elif page == "Packing":
             "المسلم بالكرتونة": daily_by_cat["المسلم بالكرتونة"].sum()
         }])
         daily_by_cat_display = pd.concat([daily_by_cat, total_row], ignore_index=True)
-        daily_by_cat_display["المسلم بالطن"] = daily_by_cat_display["المسلم بالطن"].round(2)
 
         st.dataframe(daily_by_cat_display, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.markdown("#### 🖨️ إعدادات تقرير الطباعة")
+        default_elapsed = min(datetime.now().day, days_in_month) if selected_month == datetime.now().strftime("%Y-%m") else days_in_month
+
+        plan_c1, plan_c2 = st.columns(2)
+        with plan_c1:
+            plan_total_days = st.number_input(
+                "📅 مدة الخطة الكلية (كام يوم)",
+                min_value=1, max_value=62, value=days_in_month, step=1,
+                key="packing_plan_total_days"
+            )
+        with plan_c2:
+            days_elapsed = st.number_input(
+                "📆 عدد الأيام اللي عدت فعلاً من الخطة",
+                min_value=1, max_value=int(plan_total_days), value=min(default_elapsed, int(plan_total_days)), step=1,
+                key="packing_days_elapsed"
+            )
+
+        print_df = summary[["الصنف"]].copy()
+        print_df[f"تعبئة يوم {day_pick}"] = summary[day_col_pick]
+        print_df["إجمالي الكراتين"] = summary["إجمالي الكراتين"]
+        print_df["المخطط بالكراتين (شهري)"] = summary["المخطط بالكراتين (شهري)"]
+
+        print_df["نسبة التحقيق %"] = summary.apply(
+            lambda r: round((r["إجمالي الكراتين"] / r["المخطط بالكراتين (شهري)"] * 100), 1)
+            if r["المخطط بالكراتين (شهري)"] > 0 else 0,
+            axis=1
+        )
+
+        print_df["نصيب اليوم (كرتونة)"] = summary.apply(
+            lambda r: round(r["المخطط بالكراتين (شهري)"] / plan_total_days, 1) if plan_total_days > 0 else 0,
+            axis=1
+        )
+        print_df["المتوقع حتى الآن (كرتونة)"] = (print_df["نصيب اليوم (كرتونة)"] * days_elapsed).round(1)
+
+        print_df = print_df.fillna(0)
+
+        total_actual_all = print_df["إجمالي الكراتين"].sum()
+        total_target_all = print_df["المخطط بالكراتين (شهري)"].sum()
+        total_row_print = pd.DataFrame([{
+            "الصنف": "الإجمالي",
+            f"تعبئة يوم {day_pick}": print_df[f"تعبئة يوم {day_pick}"].sum(),
+            "إجمالي الكراتين": total_actual_all,
+            "المخطط بالكراتين (شهري)": total_target_all,
+            "نسبة التحقيق %": round((total_actual_all / total_target_all * 100), 1) if total_target_all > 0 else 0,
+            "نصيب اليوم (كرتونة)": print_df["نصيب اليوم (كرتونة)"].sum(),
+            "المتوقع حتى الآن (كرتونة)": print_df["المتوقع حتى الآن (كرتونة)"].sum(),
+        }])
+        print_df = pd.concat([print_df, total_row_print], ignore_index=True)
+
+        printable_html = build_printable_html(
+            f"تقرير Packing — شهر {selected_month}",
+            f"تاريخ الطباعة: {datetime.now().strftime('%Y-%m-%d %H:%M')} — الخطة {plan_total_days} يوم، عدى منها {days_elapsed} يوم",
+            print_df,
+            extra_title=f"📅 ملخص يوم {day_pick} بالفئات (المسلم بالطن والكرتونة)",
+            extra_df=daily_by_cat_display
+        )
+        st.download_button(
+            "🖨️ تحميل نسخة قابلة للطباعة (PDF)",
+            data=printable_html.encode("utf-8"),
+            file_name=f"packing_{selected_month}.html",
+            mime="text/html",
+            help="افتح الملف بعد التحميل، ودوس Ctrl+P واختار 'Save as PDF' عشان تحوله PDF أو تطبعه"
+        )
 
         st.divider()
         st.subheader("📈 الرسوم البيانية")
@@ -635,7 +710,7 @@ elif page == "Packing":
         st.markdown("#### 🔍 تفاصيل فئة معينة")
         category_choice = st.selectbox(
             "اختر الفئة",
-            ["Hard Candy", "Toffee", "Eclair", "Other"],
+            ["هارد كاندي", "طوفي", "اكلير", "أخرى"],
             key="packing_category_filter"
         )
         cat_df = summary[summary["الفئة"] == category_choice]
@@ -779,6 +854,29 @@ elif page == "الأعطال":
             st.rerun()
 
     st.divider()
+    daily_print_df = edited_log[edited_log["مدة العطل (دقيقة)"].apply(
+        lambda v: pd.to_numeric(v, errors="coerce") if pd.notna(v) else 0
+    ) > 0].copy()
+    if not daily_print_df.empty:
+        daily_print_df["من الساعة"] = daily_print_df["من الساعة"].apply(lambda t: t.strftime("%H:%M") if t else "-")
+        daily_print_df["إلى الساعة"] = daily_print_df["إلى الساعة"].apply(lambda t: t.strftime("%H:%M") if t else "-")
+        daily_faults_html = build_printable_html(
+            f"تقرير الأعطال اليومي — {log_date.strftime('%Y-%m-%d')}",
+            f"تاريخ الطباعة: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            daily_print_df[["الخط", "من الساعة", "إلى الساعة", "مدة العطل (دقيقة)", "سبب العطل"]]
+        )
+        st.download_button(
+            "🖨️ تحميل تقرير الأعطال اليومي (PDF)",
+            data=daily_faults_html.encode("utf-8"),
+            file_name=f"faults_daily_{log_date.strftime('%Y-%m-%d')}.html",
+            mime="text/html",
+            help="افتح الملف بعد التحميل، ودوس Ctrl+P واختار 'Save as PDF'",
+            key="faults_daily_print_btn"
+        )
+    else:
+        st.caption("سجل مدة عطل لخط واحد على الأقل عشان يظهر زرار طباعة اليوم")
+
+    st.divider()
 
     faults_grid, FAULTS_FILE, _ = load_faults_grid(selected_month_f, st.session_state.production_lines)
 
@@ -870,9 +968,1238 @@ elif page == "الأعطال":
 
 elif page == "Inventory":
     st.header("📦Inventory")
+    st.subheader("جرد الاكلير (ص٣)")
 
+    INV_LOG_FILE = "inventory_eclair_log.csv"
+    # ==========================================================
+    # الجرد الدفتري والفعلي للمواد الخام
+    # ==========================================================
+
+    st.header("📒 الجرد الدفتري مقابل الجرد الفعلي")
+
+    RECIPES_FILE = "recipes_master.csv"
+    RAW_FILE = "raw_inventory.csv"
+    BATCH_FILE = "recipe_batches.csv"
+
+    recipe_columns = [
+        "الريسبي",
+        "النوع",
+        "المادة الخام",
+        "الكمية للوحدة"
+    ]
+
+    raw_columns = [
+        "Date",
+        "المادة الخام",
+        "رصيد اول المدة",
+        "الوارد",
+        "المرتجع",
+        "الهالك",
+        "المستخدم",
+        "الجرد الدفتري",
+        "الجرد الفعلي",
+        "الفرق"
+    ]
+
+    batch_columns = [
+        "Date",
+        "الريسبي",
+        "عدد الطبخات"
+    ]
+
+    # -----------------------------
+    # تحميل الريسبيات
+    # -----------------------------
+
+    if os.path.exists(RECIPES_FILE):
+
+        recipes_df = pd.read_csv(
+            RECIPES_FILE,
+            encoding="utf-8-sig"
+        )
+
+    else:
+
+        recipes_df = pd.DataFrame(
+            columns=recipe_columns
+        )
+
+    for c in recipe_columns:
+
+        if c not in recipes_df.columns:
+
+            recipes_df[c] = ""
+
+    recipes_df["الكمية للوحدة"] = pd.to_numeric(
+        recipes_df["الكمية للوحدة"],
+        errors="coerce"
+    ).fillna(0)
+
+    recipes_df["الريسبي"] = (
+        recipes_df["الريسبي"]
+        .astype(str)
+        .str.strip()
+    )
+
+    recipes_df["المادة الخام"] = (
+        recipes_df["المادة الخام"]
+        .astype(str)
+        .str.strip()
+    )
+
+    st.subheader("📒 الريسبيات")
+
+    recipes_editor = st.data_editor(
+
+        recipes_df,
+
+        hide_index=True,
+
+        use_container_width=True,
+
+        num_rows="dynamic",
+
+        key="recipes_editor",
+
+        column_config={
+
+            "النوع": st.column_config.SelectboxColumn(
+
+                "النوع",
+
+                options=[
+                    "طبخة",
+                    "حشو"
+                ]
+
+            ),
+
+            "الكمية للوحدة": st.column_config.NumberColumn(
+
+                "الكمية للوحدة",
+
+                format="%.3f",
+
+                step=0.001
+
+            )
+
+        }
+
+    )
+
+    if st.button("💾 حفظ الريسبيات"):
+
+        recipes_editor.to_csv(
+
+            RECIPES_FILE,
+
+            index=False,
+
+            encoding="utf-8-sig"
+
+        )
+
+        st.success("تم حفظ الريسبيات")
+
+        st.rerun()
+
+    recipe_names = sorted(
+
+        recipes_editor["الريسبي"]
+
+        .dropna()
+
+        .astype(str)
+
+        .str.strip()
+
+        .unique()
+
+    )
+
+    materials = sorted(
+
+        recipes_editor["المادة الخام"]
+
+        .dropna()
+
+        .astype(str)
+
+        .str.strip()
+
+        .unique()
+
+    )
+
+    st.divider()
+    # ==========================================================
+    # اختيار التاريخ + عدد الطبخات + حساب المستخدم
+    # ==========================================================
+
+    st.subheader("🍳 عدد الطبخات")
+
+    inventory_date = st.date_input(
+        "📅 تاريخ الجرد",
+        value=datetime.now().date(),
+        key="inventory_date"
+    )
+
+    today = inventory_date.strftime("%Y-%m-%d")
+
+    # -----------------------------
+    # تحميل عدد الطبخات
+    # -----------------------------
+
+    if os.path.exists(BATCH_FILE):
+
+        batch_log = pd.read_csv(
+            BATCH_FILE,
+            encoding="utf-8-sig"
+        )
+
+        batch_log["Date"] = batch_log["Date"].astype(str)
+
+    else:
+
+        batch_log = pd.DataFrame(
+            columns=batch_columns
+        )
+
+    today_batch = batch_log[
+        batch_log["Date"] == today
+    ]
+
+    rows = []
+
+    for recipe in recipe_names:
+
+        if recipe in today_batch["الريسبي"].values:
+
+            value = float(
+
+                today_batch.loc[
+                    today_batch["الريسبي"] == recipe,
+                    "عدد الطبخات"
+                ].iloc[0]
+
+            )
+
+        else:
+
+            value = 0.0
+
+        rows.append({
+
+            "الريسبي": recipe,
+
+            "عدد الطبخات": value
+
+        })
+
+    batch_df = pd.DataFrame(rows)
+
+    batch_editor = st.data_editor(
+
+        batch_df,
+
+        hide_index=True,
+
+        use_container_width=True,
+
+        num_rows="fixed",
+
+        key=f"batch_editor_{today}",
+
+        column_config={
+
+            "الريسبي":
+
+                st.column_config.TextColumn(
+
+                    disabled=True
+
+                ),
+
+            "عدد الطبخات":
+
+                st.column_config.NumberColumn(
+
+                    format="%.2f",
+
+                    step=0.5,
+
+                    min_value=0.0
+
+                )
+
+        }
+
+    )
+
+    batch_editor["عدد الطبخات"] = pd.to_numeric(
+
+        batch_editor["عدد الطبخات"],
+
+        errors="coerce"
+
+    ).fillna(0)
+
+    batch_map = {}
+
+    for _, row in batch_editor.iterrows():
+
+        batch_map[str(row["الريسبي"]).strip()] = float(
+
+            row["عدد الطبخات"]
+
+        )
+
+    # ==========================================================
+    # حساب المستخدم لكل خامة
+    # ==========================================================
+
+    usage_dict = {}
+
+    for _, row in recipes_editor.iterrows():
+
+        recipe = str(row["الريسبي"]).strip()
+
+        material = str(row["المادة الخام"]).strip()
+
+        qty = float(row["الكمية للوحدة"])
+
+        batches = batch_map.get(recipe, 0)
+
+        used = qty * batches
+
+        usage_dict[material] = usage_dict.get(material, 0) + used
+
+    usage_table = pd.DataFrame(
+
+        [
+
+            {
+
+                "المادة الخام": k,
+
+                "المستخدم": round(v,3)
+
+            }
+
+            for k,v in usage_dict.items()
+
+        ]
+
+    )
+
+    st.subheader("📦 المستخدم المحسوب تلقائياً")
+
+    if usage_table.empty:
+
+        st.info("لا يوجد استهلاك.")
+
+    else:
+
+        st.dataframe(
+
+            usage_table.sort_values("المادة الخام"),
+
+            hide_index=True,
+
+            use_container_width=True
+
+        )
+
+    st.divider()
+    # ==========================================================
+    # الجرد الدفتري والفعلي
+    # ==========================================================
+
+    st.subheader("📦 الجرد الدفتري والفعلي")
+
+    # -----------------------------
+    # تحميل الجرد السابق
+    # -----------------------------
+
+    if os.path.exists(RAW_FILE):
+
+        raw_log = pd.read_csv(
+            RAW_FILE,
+            encoding="utf-8-sig"
+        )
+
+        raw_log["Date"] = raw_log["Date"].astype(str)
+
+    else:
+
+        raw_log = pd.DataFrame(columns=raw_columns)
+
+    rows = []
+
+    for material in materials:
+
+        today_row = raw_log[
+            (raw_log["Date"] == today)
+            &
+            (raw_log["المادة الخام"] == material)
+        ]
+
+        if not today_row.empty:
+
+            opening = float(today_row.iloc[0]["رصيد اول المدة"])
+            incoming = float(today_row.iloc[0]["الوارد"])
+            returned = float(today_row.iloc[0]["المرتجع"])
+            waste = float(today_row.iloc[0]["الهالك"])
+            actual = float(today_row.iloc[0]["الجرد الفعلي"])
+
+        else:
+
+            history = raw_log[
+                (raw_log["المادة الخام"] == material)
+                &
+                (raw_log["Date"] < today)
+            ]
+
+            if history.empty:
+
+                opening = 0
+
+            else:
+
+                history = history.sort_values("Date")
+
+                opening = float(
+                    history.iloc[-1]["الجرد الدفتري"]
+                )
+
+            incoming = 0
+            returned = 0
+            waste = 0
+            actual = 0
+
+        rows.append({
+
+            "المادة الخام": material,
+
+            "رصيد اول المدة": opening,
+
+            "الوارد": incoming,
+
+            "المرتجع": returned,
+
+            "الهالك": waste,
+
+            "الجرد الفعلي": actual
+
+        })
+
+    raw_df = pd.DataFrame(rows)
+
+    edited_raw = st.data_editor(
+
+        raw_df,
+
+        hide_index=True,
+
+        use_container_width=True,
+
+        num_rows="fixed",
+
+        key=f"raw_editor_{today}",
+
+        column_config={
+
+            "رصيد اول المدة": st.column_config.NumberColumn(
+                format="%.3f",
+                step=0.001
+            ),
+
+            "الوارد": st.column_config.NumberColumn(
+                format="%.3f",
+                step=0.001
+            ),
+
+            "المرتجع": st.column_config.NumberColumn(
+                format="%.3f",
+                step=0.001
+            ),
+
+            "الهالك": st.column_config.NumberColumn(
+                format="%.3f",
+                step=0.001
+            ),
+
+            "الجرد الفعلي": st.column_config.NumberColumn(
+                format="%.3f",
+                step=0.001
+            )
+
+        }
+
+    )
+
+    # -----------------------------
+    # الحسابات
+    # -----------------------------
+
+    calc = edited_raw.copy()
+
+    numeric_cols = [
+
+        "رصيد اول المدة",
+
+        "الوارد",
+
+        "المرتجع",
+
+        "الهالك",
+
+        "الجرد الفعلي"
+
+    ]
+
+    for col in numeric_cols:
+
+        calc[col] = pd.to_numeric(
+            calc[col],
+            errors="coerce"
+        ).fillna(0)
+
+    calc["المستخدم"] = calc["المادة الخام"].map(
+        usage_dict
+    ).fillna(0)
+
+    calc["الجرد الدفتري"] = (
+
+        calc["رصيد اول المدة"]
+
+        +
+
+        calc["الوارد"]
+
+        -
+
+        calc["المرتجع"]
+
+        -
+
+        calc["الهالك"]
+
+        -
+
+        calc["المستخدم"]
+
+    )
+
+    calc["الفرق"] = (
+
+        calc["الجرد الفعلي"]
+
+        -
+
+        calc["الجرد الدفتري"]
+
+    )
+
+    calc["الحالة"] = calc["الفرق"].apply(
+
+        lambda x:
+
+        "✔ مطابق"
+
+        if abs(x) < 0.001
+
+        else (
+
+            f"⚠ عجز {abs(x):.3f}"
+
+            if x < 0
+
+            else f"✅ زيادة {x:.3f}"
+
+        )
+
+    )
+
+    st.dataframe(
+
+        calc[
+
+            [
+
+                "المادة الخام",
+
+                "رصيد اول المدة",
+
+                "الوارد",
+
+                "المرتجع",
+
+                "الهالك",
+
+                "المستخدم",
+
+                "الجرد الدفتري",
+
+                "الجرد الفعلي",
+
+                "الفرق",
+
+                "الحالة"
+
+            ]
+
+        ],
+
+        hide_index=True,
+
+        use_container_width=True
+
+    )
+
+    st.metric(
+        "إجمالي المستخدم",
+        f"{calc['المستخدم'].sum():.3f}"
+    )
+
+    st.metric(
+        "إجمالي الفرق",
+        f"{calc['الفرق'].sum():.3f}"
+    )
+
+    st.divider()
+    # ==========================================================
+    # حفظ الجرد + حفظ عدد الطبخات
+    # ==========================================================
+
+    if st.button("💾 حفظ الجرد", use_container_width=True):
+
+        # --------------------------
+        # حفظ عدد الطبخات
+        # --------------------------
+
+        save_batches = batch_editor.copy()
+
+        save_batches["Date"] = today
+
+        save_batches = save_batches[
+            [
+                "Date",
+                "الريسبي",
+                "عدد الطبخات"
+            ]
+        ]
+
+        if os.path.exists(BATCH_FILE):
+
+            old_batches = pd.read_csv(
+                BATCH_FILE,
+                encoding="utf-8-sig"
+            )
+
+            old_batches["Date"] = old_batches["Date"].astype(str)
+
+            old_batches = old_batches[
+                old_batches["Date"] != today
+            ]
+
+        else:
+
+            old_batches = pd.DataFrame(
+                columns=batch_columns
+            )
+
+        old_batches = pd.concat(
+            [
+                old_batches,
+                save_batches
+            ],
+            ignore_index=True
+        )
+
+        old_batches.to_csv(
+            BATCH_FILE,
+            index=False,
+            encoding="utf-8-sig"
+        )
+
+        # --------------------------
+        # حفظ الجرد
+        # --------------------------
+
+        save_inventory = calc.copy()
+
+        save_inventory["Date"] = today
+
+        save_inventory = save_inventory[
+            [
+                "Date",
+                "المادة الخام",
+                "رصيد اول المدة",
+                "الوارد",
+                "المرتجع",
+                "الهالك",
+                "المستخدم",
+                "الجرد الدفتري",
+                "الجرد الفعلي",
+                "الفرق"
+            ]
+        ]
+
+        if os.path.exists(RAW_FILE):
+
+            old_inventory = pd.read_csv(
+                RAW_FILE,
+                encoding="utf-8-sig"
+            )
+
+            old_inventory["Date"] = old_inventory["Date"].astype(str)
+
+            old_inventory = old_inventory[
+                old_inventory["Date"] != today
+            ]
+
+        else:
+
+            old_inventory = pd.DataFrame(
+                columns=raw_columns
+            )
+
+        old_inventory = pd.concat(
+            [
+                old_inventory,
+                save_inventory
+            ],
+            ignore_index=True
+        )
+
+        old_inventory.to_csv(
+            RAW_FILE,
+            index=False,
+            encoding="utf-8-sig"
+        )
+
+        st.success("✅ تم حفظ الجرد بنجاح")
+
+        st.rerun()
+
+
+    # ==========================================================
+    # تقرير الجرد
+    # ==========================================================
+
+    if not calc.empty:
+
+        report = calc[
+            [
+                "المادة الخام",
+                "رصيد اول المدة",
+                "الوارد",
+                "المرتجع",
+                "الهالك",
+                "المستخدم",
+                "الجرد الدفتري",
+                "الجرد الفعلي",
+                "الفرق",
+                "الحالة"
+            ]
+        ]
+
+        html = build_printable_html(
+            "جرد المواد الخام",
+            f"تاريخ الجرد : {today}",
+            report
+        )
+
+        st.download_button(
+            "🖨️ تحميل تقرير الجرد",
+            data=html.encode("utf-8"),
+            file_name=f"Raw_Inventory_{today}.html",
+            mime="text/html"
+        )
+
+    
 elif page == "Workers":
-    st.header("👷‍♂️workers")
+    # ==============================
+    # إدارة العمال
+    # ==============================
+
+    st.header("👷 إدارة العمال")
+
+    # ملفات كل خط
+    worker_files = {
+        "الإيطالي": "workers_italy.csv",
+        "المستمر": "workers_continuous.csv",
+        "اللفافات": "workers_rolls.csv",
+        "الترانسلاب": "workers_translab.csv",
+        "الطوفي": "workers_toffee.csv",
+        "السولا": "workers_sola.csv",
+        "الطباخات": "workers_cooking.csv",
+        "الجودة": "workers_quality.csv",
+    }
+
+    selected_line = st.selectbox(
+        "اختر الخط",
+        list(worker_files.keys())
+    )
+
+    file_name = worker_files[selected_line]
+
+    # إنشاء الملف أول مرة
+    if not os.path.exists(file_name):
+        df = pd.DataFrame(
+            columns=[
+                "الاسم",
+                "الشيفت",
+                "الكود",
+                "خط السير"
+            ]
+        )
+        df.to_csv(file_name, index=False, encoding="utf-8-sig")
+
+    # قراءة البيانات
+    workers_df = pd.read_csv(
+    file_name,
+    dtype=str
+    ).fillna("")
+
+    # تنظيف أي أحرف \n أو أسطر جديدة اتسربت في الأسماء قديمًا
+    for c in ["الاسم", "الشيفت", "الكود", "خط السير"]:
+        workers_df[c] = (
+            workers_df[c].astype(str)
+            .str.replace(r"\\n", " ", regex=True)
+            .str.replace("\n", " ", regex=False)
+            .str.replace(r"\s+", " ", regex=True)
+            .str.strip()
+        )
+
+    # ---------- إضافة أسماء دفعة واحدة (بدل لصق الجدول اللي بيلخبط) ----------
+    with st.expander("➕ إضافة أسماء دفعة واحدة (الصق قائمة أسماء)"):
+        st.caption("الصق قائمة الأسماء هنا، اسم في كل سطر، وهتتضاف كصفوف جديدة في الجدول تلقائي")
+        bulk_names = st.text_area("قائمة الأسماء", key=f"bulk_names_{selected_line}", height=150)
+        if st.button("➕ إضافة الأسماء دي", key=f"bulk_add_btn_{selected_line}"):
+            new_names = [n.strip() for n in bulk_names.splitlines() if n.strip()]
+            if not new_names:
+                st.warning("الصق اسم واحد على الأقل قبل الإضافة ⚠")
+            else:
+                new_rows = pd.DataFrame([
+                    {"الاسم": n, "الشيفت": "", "الكود": "", "خط السير": ""} for n in new_names
+                ])
+                workers_df = pd.concat([workers_df, new_rows], ignore_index=True)
+                workers_df.to_csv(file_name, index=False, encoding="utf-8-sig")
+                st.success(f"اتضاف {len(new_names)} اسم ✔")
+                st.rerun()
+
+    # عرض الجدول
+    edited_df = st.data_editor(
+        workers_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "الاسم": st.column_config.TextColumn(
+                "الاسم"
+            ),
+
+            "الشيفت": st.column_config.SelectboxColumn(
+                "الشيفت",
+                options=["", "1", "2", "3"]
+            ),
+
+            "الكود": st.column_config.TextColumn(
+                "الكود"
+            ),
+
+            "خط السير": st.column_config.TextColumn(
+                "خط السير"
+            ),
+        },
+    )
+    # ==========================
+    # أزرار التحكم
+    # ==========================
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        save_btn = st.button("💾 حفظ", use_container_width=True)
+
+    with col2:
+        clear_btn = st.button("🧹 مسح جميع الشيفتات", use_container_width=True)
+
+    with col3:
+        reload_btn = st.button("🔄 إعادة تحميل", use_container_width=True)
+
+    # ==========================
+    # مسح الشيفتات
+    # ==========================
+
+    if clear_btn:
+        edited_df["الشيفت"] = ""
+        edited_df.to_csv(file_name, index=False, encoding="utf-8-sig")
+        st.success("تم مسح جميع الشيفتات")
+
+    # ==========================
+    # حفظ البيانات
+    # ==========================
+
+    if save_btn:
+
+        edited_df.to_csv(
+            file_name,
+            index=False,
+            encoding="utf-8-sig"
+        )
+
+        st.success("✅ تم حفظ البيانات")
+
+        st.divider()
+
+        st.subheader(f"📋 توزيع عمال خط {selected_line}")
+
+        shift1 = edited_df[edited_df["الشيفت"].astype(str)=="1"]
+        shift2 = edited_df[edited_df["الشيفت"].astype(str)=="2"]
+        shift3 = edited_df[edited_df["الشيفت"].astype(str)=="3"]
+
+        st.info(
+            f"""
+    إجمالي العمال : {len(edited_df)}
+
+    الشيفت الأول : {len(shift1)}
+
+    الشيفت الثاني : {len(shift2)}
+
+    الشيفت الثالث : {len(shift3)}
+    """
+        )
+
+        st.markdown("## 🟢 الشيفت الأول")
+        st.dataframe(
+            shift1[["الاسم","الكود","خط السير"]],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.markdown("## 🟡 الشيفت الثاني")
+        st.dataframe(
+            shift2[["الاسم","الكود","خط السير"]],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.markdown("## 🔵 الشيفت الثالث")
+        st.dataframe(
+            shift3[["الاسم","الكود","خط السير"]],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # ==========================
+    # كلمات مرور الخطوط
+    # ==========================
+
+    line_passwords = {
+        "الإيطالي": "1111",
+        "المستمر": "2222",
+        "اللفافات": "3333",
+        "الترانسلاب": "4444",
+        "الطوفي": "5555",
+        "السولا": "6666",
+        "الطباخات": "7777",
+        "الجودة": "8888",
+    }
+
+    st.subheader("🔒 دخول المهندس المسؤول")
+
+    password = st.text_input(
+        "كلمة المرور",
+        type="password"
+    )
+
+    allow_edit = password == line_passwords[selected_line]
+
+    if allow_edit:
+        st.success("تم فتح صلاحية التعديل")
+    else:
+        st.warning("يمكنك مشاهدة البيانات فقط")
+    # ===================================
+    # لوحة المدير
+    # ===================================
+
+    st.divider()
+
+    manager_pass = "ahmed123"
+
+    with st.expander("⚙️ لوحة المدير"):
+
+        admin_password = st.text_input(
+            "كلمة مرور المدير",
+            type="password",
+            key="admin_pass"
+        )
+
+        if admin_password == manager_pass:
+
+            st.success("تم تسجيل دخول المدير")
+
+            st.subheader("➕ إضافة عامل")
+
+            new_name = st.text_input("الاسم")
+
+            new_code = st.text_input("الكود")
+
+            new_route = st.text_input("خط السير")
+
+            if st.button("إضافة العامل"):
+
+                workers_df.loc[len(workers_df)] = [
+                    new_name,
+                    "",
+                    new_code,
+                    new_route
+                ]
+
+                workers_df.to_csv(
+                    file_name,
+                    index=False,
+                    encoding="utf-8-sig"
+                )
+
+                st.success("تم إضافة العامل")
+
+            st.divider()
+
+            st.subheader("🗑️ حذف عامل")
+
+            delete_worker = st.selectbox(
+                "اختر العامل",
+                workers_df["الاسم"]
+            )
+
+            if st.button("حذف العامل"):
+
+                workers_df = workers_df[
+                    workers_df["الاسم"] != delete_worker
+                ]
+
+                workers_df.to_csv(
+                    file_name,
+                    index=False,
+                    encoding="utf-8-sig"
+                )
+
+                st.success("تم حذف العامل")
+
+            st.divider()
+
+            st.subheader("✏️ تعديل بيانات عامل")
+
+            selected = st.selectbox(
+                "العامل",
+                workers_df["الاسم"],
+                key="edit_worker"
+            )
+            st.write(selected)
+            st.write(workers_df["الاسم"]) 
+            row = workers_df[
+                workers_df["الاسم"] == selected
+            ].index[0]
+
+            edit_name = st.text_input(
+                "الاسم الجديد",
+                workers_df.loc[row,"الاسم"]
+            )
+
+            edit_code = st.text_input(
+                "الكود الجديد",
+                workers_df.loc[row,"الكود"]
+            )
+
+            edit_route = st.text_input(
+                "خط السير الجديد",
+                workers_df.loc[row,"خط السير"]
+            )
+
+            if st.button("حفظ التعديل"):
+
+                workers_df.loc[row,"الاسم"] = edit_name
+                workers_df.loc[row,"الكود"] = edit_code
+                workers_df.loc[row,"خط السير"] = edit_route
+
+                workers_df.to_csv(
+                    file_name,
+                    index=False,
+                    encoding="utf-8-sig"
+                )
+
+                st.success("تم حفظ التعديل")
+
+        elif admin_password != "":
+            st.error("كلمة مرور المدير غير صحيحة")
+
+    # ==========================
+    # إنشاء تقرير للطباعة
+    # ==========================
+
+    report_html = f"""
+    <html>
+    <head>
+    <meta charset="UTF-8">
+    <style>
+
+    body {{
+    font-family: Arial;
+    direction: rtl;
+    margin:40px;
+    }}
+
+    h1,h2,h3 {{
+    text-align:center;
+    }}
+
+    table {{
+
+    width:100%;
+    border-collapse:collapse;
+    margin-bottom:25px;
+
+    }}
+
+    th,td {{
+
+    border:1px solid black;
+    padding:8px;
+    text-align:center;
+
+    }}
+
+    .page-break {{
+    display:block;
+    page-break-after:always;
+    }}
+
+    </style>
+    </head>
+
+    <body>
+
+    <h1>تقرير توزيع العمال</h1>
+
+    <h2>{selected_line}</h2>
+
+    <h3>{pd.Timestamp.today().strftime("%Y-%m-%d")}</h3>
+
+    """
+
+    for i, shift in enumerate(["1", "2", "3"]):
+
+        report_html += f"<h1>بيان بأسماء العاملين بالشيفت {shift}</h1>"
+
+        temp = edited_df[
+            edited_df["الشيفت"].astype(str)==shift
+        ][["الاسم","الكود","خط السير"]]
+
+        report_html += temp.to_html(index=False)
+
+        if i < 2:
+            report_html += '<div class="page-break"></div>'
+
+    report_html += "</body></html>"
+
+    b64 = base64.b64encode(
+        report_html.encode("utf-8")
+    ).decode()
+
+    href = f"""
+    <a download="report_{selected_line}.html"
+    href="data:text/html;base64,{b64}">
+    📄 تحميل التقرير للطباعة
+    </a>
+    """
+
+    st.markdown(href, unsafe_allow_html=True)
+
+    st.download_button(
+        "📊 تحميل CSV",
+        edited_df.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"{selected_line}.csv",
+        mime="text/csv"
+    )
+
+    # ==========================
+    # تقرير موحّد لكل الخطوط حسب الشيفت
+    # ==========================
+
+    st.divider()
+    st.subheader("🖨️ تقرير موحّد لكل الخطوط حسب الشيفت")
+    st.caption("بيان بأسماء العاملين في كل الخطوط مع بعض، كل خط في عمود، مقسّم حسب الشيفت — زي بيان الإكسيل")
+
+    if st.button("🧾 توليد التقرير الموحّد"):
+        all_lines_data = {}
+        for line_name, fpath in worker_files.items():
+            if os.path.exists(fpath):
+                df_line = pd.read_csv(fpath, dtype=str).fillna("")
+            else:
+                df_line = pd.DataFrame(columns=["الاسم", "الشيفت", "الكود", "خط السير"])
+            for c in ["الاسم", "الشيفت"]:
+                df_line[c] = (
+                    df_line[c].astype(str)
+                    .str.replace(r"\\n", " ", regex=True)
+                    .str.replace("\n", " ", regex=False)
+                    .str.replace(r"\s+", " ", regex=True)
+                    .str.strip()
+                )
+            all_lines_data[line_name] = df_line
+
+        combined_html = f"""
+        <html>
+        <head>
+        <meta charset="UTF-8">
+        <style>
+        body {{ font-family: Arial; direction: rtl; margin:40px; }}
+        h1,h2,h3 {{ text-align:center; }}
+        table {{ width:100%; border-collapse:collapse; margin-bottom:25px; }}
+        th,td {{ border:1px solid black; padding:8px; text-align:center; }}
+        th {{ background-color:#f4b183; }}
+        .page-break {{ display:block; page-break-after:always; }}
+        </style>
+        </head>
+        <body>
+        """
+
+        for i, shift in enumerate(["1", "2", "3"]):
+            st.markdown(f"### بيان بأسماء العاملين بالشيفت {shift}")
+            col_data = {}
+            max_len = 0
+            for line_name, df_line in all_lines_data.items():
+                names = df_line[df_line["الشيفت"].astype(str) == shift]["الاسم"].tolist()
+                col_data[line_name] = names
+                max_len = max(max_len, len(names))
+            for line_name in col_data:
+                col_data[line_name] = col_data[line_name] + [""] * (max_len - len(col_data[line_name]))
+
+            shift_df = pd.DataFrame(col_data) if max_len > 0 else pd.DataFrame(columns=list(worker_files.keys()))
+            st.dataframe(shift_df, use_container_width=True, hide_index=True)
+
+            combined_html += f"<h1>بيان بأسماء العاملين بالشيفت {shift}</h1>"
+            combined_html += f"<h3>{pd.Timestamp.today().strftime('%Y-%m-%d')}</h3>"
+            combined_html += shift_df.to_html(index=False)
+            if i < 2:
+                combined_html += '<div class="page-break"></div>'
+
+        combined_html += "</body></html>"
+
+        b64_all = base64.b64encode(combined_html.encode("utf-8")).decode()
+        href_all = f"""
+        <a download="report_all_lines_by_shift.html"
+        href="data:text/html;base64,{b64_all}">
+        📄 تحميل التقرير الموحّد للطباعة
+        </a>
+        """
+        st.markdown(href_all, unsafe_allow_html=True)
+
+
 
 elif page == "Reports":
     st.header("📖Reports")
